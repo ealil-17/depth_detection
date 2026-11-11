@@ -128,7 +128,6 @@ class ObjectDetector:
                 iou=self.iou_threshold,
                 imgsz=self.img_size,
                 device=self.device,
-                half=("cuda" in str(self.device)),
                 verbose=False,
             )
 
