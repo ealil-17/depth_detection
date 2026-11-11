@@ -16,6 +16,7 @@ import threading
 import time
 import cv2
 import numpy as np
+import torch
 from flask import Flask, Response, jsonify, render_template, request
 
 import config
@@ -31,22 +32,38 @@ app = Flask(__name__, template_folder="templates")
 
 # Global state for streaming and pipeline
 class VideoPipeline:
-    def __init__(self, camera_index=0, width=1280, height=720, fps=30, device="cpu"):
+    def __init__(self, camera_index=0, width=1280, height=720, fps=30, device=None):
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.fps = fps
-        self.device = device
+        self.device = device or config.YOLO_DEVICE
         self.confidence = config.YOLO_CONFIDENCE_THRESHOLD
         self.depth_cadence = config.DEPTH_PROCESS_EVERY_N
+        self.depth_model_type = config.DEPTH_MODEL_TYPE
+        self.depth_scale = getattr(config, "DEPTH_SCALE_FACTOR", 1.0)
         self.is_streaming = True
         self.use_simulation = False
+
+        self.gpu_info = "CPU Mode"
+        if torch.cuda.is_available():
+            self.gpu_info = f"GPU: {torch.cuda.get_device_name(0)}"
+            print(f"[Pipeline] ✓ CUDA GPU Acceleration Active: {self.gpu_info}")
+        else:
+            print("[Pipeline] ⚠ PyTorch CUDA not available. Running on CPU.")
 
         self.lock = threading.Lock()
         self.latest_annotated_jpeg = None
         self.latest_depth_jpeg = None
         self.latest_detections = []
         self.current_fps = 0.0
+
+        # Asynchronous decoupled depth worker state
+        self._depth_lock = threading.Lock()
+        self._cached_depth_map = None
+        self._cached_depth_vis = None
+        self._latest_raw_frame = None
+        self._depth_thread = None
 
         # Modules
         self.camera = None
@@ -118,12 +135,18 @@ class VideoPipeline:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
-        print("[Pipeline] Background inference worker started.")
+
+        # Start asynchronous decoupled depth estimation thread
+        self._depth_thread = threading.Thread(target=self._depth_worker_loop, daemon=True)
+        self._depth_thread.start()
+        print("[Pipeline] Asynchronous 30 FPS camera loop and decoupled depth worker active.")
 
     def stop(self):
         self._stop_event.set()
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.0)
+        if self._depth_thread:
+            self._depth_thread.join(timeout=1.0)
         if self.camera:
             self.camera.release()
 
@@ -148,6 +171,39 @@ class VideoPipeline:
                 print(f"[Pipeline] Physical camera index {self.camera_index} not accessible. Using simulation.")
                 self.use_simulation = True
             return success
+
+    def switch_depth_model(self, new_model_type):
+        """Hot-swap depth estimation model (e.g. vitl, vitb, vits, zoedepth)."""
+        print(f"[Pipeline] Switching depth model to '{new_model_type}' on device '{self.device}'...")
+        with self.lock:
+            self.depth_model_type = new_model_type
+            try:
+                estimator = DepthEstimator(
+                    model_type=new_model_type,
+                    encoder=new_model_type,
+                    device=self.device,
+                )
+                success = estimator.load_model()
+                if success:
+                    self.depth_estimator = estimator
+                    print(f"[Pipeline] Successfully activated depth model: {new_model_type}")
+                    return True
+                else:
+                    print(f"[Pipeline] Failed to load depth model: {new_model_type}")
+                    return False
+            except Exception as e:
+                print(f"[Pipeline] Depth model switch exception: {e}")
+                return False
+
+    def set_calibration_scale(self, scale):
+        """Set distance scale multiplier to account for camera lens FOV."""
+        with self.lock:
+            self.depth_scale = float(scale)
+            print(f"[Pipeline] Updated distance scale multiplier to {self.depth_scale:.4f}")
+            if self.calibration:
+                self.calibration.calibration_params["scale"] = self.depth_scale
+                self.calibration.save_calibration()
+            return self.depth_scale
 
     def _generate_synthetic_scene(self, t):
         """Generates a dynamic 3D simulated scene with objects at known physical distances."""
@@ -216,64 +272,97 @@ class VideoPipeline:
 
         return frame, depth_map, detections
 
-    def _run_loop(self):
-        frame_count = 0
-        last_time = time.time()
-        cached_depth_map = None
-
+    def _depth_worker_loop(self):
+        """Asynchronous background worker dedicated exclusively to GPU depth estimation.
+        Decoupled from camera capture so camera & YOLO stream runs at full locked 30 FPS."""
         while not self._stop_event.is_set():
             if not self.is_streaming:
                 time.sleep(0.05)
                 continue
 
+            frame_to_process = None
+            with self.lock:
+                if self._latest_raw_frame is not None:
+                    frame_to_process = self._latest_raw_frame.copy()
+
+            if frame_to_process is None or self.use_simulation:
+                time.sleep(0.02)
+                continue
+
+            try:
+                if self.depth_estimator is not None:
+                    new_depth = self.depth_estimator.estimate_depth(frame_to_process)
+                    if new_depth is not None:
+                        depth_vis = self.depth_estimator.get_depth_colormap(new_depth)
+                        with self._depth_lock:
+                            self._cached_depth_map = new_depth
+                            self._cached_depth_vis = depth_vis
+            except Exception as e:
+                print(f"[DepthWorker] Estimation exception: {e}")
+                time.sleep(0.05)
+
+            # Cadence pause (allows GPU to share compute efficiently)
+            pause_time = 0.01 * max(1, self.depth_cadence - 1)
+            time.sleep(pause_time)
+
+    def _run_loop(self):
+        """Primary camera capture and detection loop running at full 30 FPS."""
+        frame_count = 0
+        last_time = time.time()
+
+        while not self._stop_event.is_set():
+            if not self.is_streaming:
+                time.sleep(0.03)
+                continue
+
             loop_start = time.time()
             frame_count += 1
 
-            # 1. Acquire Frame
+            # 1. Acquire Frame (Sub-millisecond from threaded grabber)
             if self.use_simulation:
-                frame, sim_depth, sim_detections = self._generate_synthetic_scene(time.time())
-                raw_frame = frame.copy()
+                raw_frame, sim_depth, sim_detections = self._generate_synthetic_scene(time.time())
+                with self._depth_lock:
+                    self._cached_depth_map = sim_depth
             else:
                 ret, raw_frame = self.camera.read_frame()
                 if not ret or raw_frame is None:
-                    time.sleep(0.03)
+                    time.sleep(0.005)
                     continue
-                sim_depth = None
                 sim_detections = None
 
-            # 2. Object Detection
+            # Feed frame to background depth worker
+            with self.lock:
+                self._latest_raw_frame = raw_frame
+
+            # 2. YOLO Object Detection (Fast GPU FP16, ~5ms)
             if self.detector is not None:
                 self.detector.confidence = self.confidence
                 detections = self.detector.detect(raw_frame)
-            elif sim_detections is not None:
+            elif self.use_simulation and sim_detections is not None:
                 detections = sim_detections
             else:
                 detections = []
 
-            # 3. Depth Estimation
-            if self.depth_estimator is not None:
-                if frame_count % self.depth_cadence == 0 or cached_depth_map is None:
-                    new_depth = self.depth_estimator.estimate_depth(raw_frame)
-                    if new_depth is not None:
-                        cached_depth_map = new_depth
-            elif sim_depth is not None:
-                cached_depth_map = sim_depth
+            # 3. Pull newest available depth map without blocking
+            with self._depth_lock:
+                active_depth_map = self._cached_depth_map
+                active_depth_vis = self._cached_depth_vis
 
-            # 4. Extract Distances
-            if cached_depth_map is not None and detections:
-                detections = self.distance_extractor.extract_all_distances(cached_depth_map, detections)
+            # 4. Extract Distances using active depth map
+            if active_depth_map is not None and detections:
+                detections = self.distance_extractor.extract_all_distances(active_depth_map, detections)
 
-                # Calibration correction
+                # Calibration & focal length scale correction
+                effective_scale = self.depth_scale
+                offset = 0.0
                 if self.calibration:
-                    scale = self.calibration.calibration_params.get("scale", 1.0)
                     offset = self.calibration.calibration_params.get("offset", 0.0)
-                    if scale != 1.0 or offset != 0.0:
-                        for d in detections:
-                            if "distance_m" in d:
-                                d["distance_m"] = self.distance_extractor.apply_calibration(
-                                    d["distance_m"], self.calibration.calibration_params
-                                )
-                                d["distance_cm"] = d["distance_m"] * 100.0
+
+                if effective_scale != 1.0 or offset != 0.0:
+                    for d in detections:
+                        if "distance_m" in d:
+                            d["distance_m"] = d["distance_m"] * effective_scale + offset
+                            d["distance_cm"] = d["distance_m"] * 100.0
 
             # 5. Object Tracking
             if self.tracker is not None and detections:
@@ -282,11 +371,11 @@ class VideoPipeline:
             # 6. Render Annotated Visuals
             annotated = self.display.draw_detections(raw_frame.copy(), detections)
 
-            # Compute and draw FPS
+            # Compute and draw true FPS
             elapsed = time.time() - last_time
             last_time = time.time()
             if elapsed > 0:
-                self.current_fps = 0.9 * self.current_fps + 0.1 * (1.0 / elapsed)
+                self.current_fps = 0.85 * self.current_fps + 0.15 * (1.0 / elapsed)
 
             cv2.putText(
                 annotated,
@@ -300,20 +389,29 @@ class VideoPipeline:
             )
 
             # Depth Colormap Frame
-            if cached_depth_map is not None:
-                if self.depth_estimator is not None:
-                    depth_vis = self.depth_estimator.get_depth_colormap(cached_depth_map)
-                else:
-                    # Synthetic colormap normalization
-                    norm = np.clip((cached_depth_map - 0.5) / 5.0, 0, 1)
-                    grey = (norm * 255).astype(np.uint8)
-                    depth_vis = cv2.applyColorMap(grey, cv2.COLORMAP_INFERNO)
+            if active_depth_vis is not None:
+                depth_vis = active_depth_vis
+            elif active_depth_map is not None:
+                norm = np.clip((active_depth_map - 0.5) / 5.0, 0, 1)
+                grey = (norm * 255).astype(np.uint8)
+                depth_vis = cv2.applyColorMap(grey, cv2.COLORMAP_INFERNO)
             else:
                 depth_vis = np.zeros_like(annotated)
 
             # Encode JPEGs into memory buffers
             _, ann_jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
             _, dep_jpeg = cv2.imencode(".jpg", depth_vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+            with self.lock:
+                self.latest_annotated_jpeg = ann_jpeg.tobytes()
+                self.latest_depth_jpeg = dep_jpeg.tobytes()
+                self.latest_detections = detections
+
+            # Cap frame loop timing at ~30 FPS
+            loop_duration = time.time() - loop_start
+            sleep_needed = (1.0 / 30.0) - loop_duration
+            if sleep_needed > 0:
+                time.sleep(sleep_needed)
 
             with self.lock:
                 self.latest_annotated_jpeg = ann_jpeg.tobytes()
@@ -408,11 +506,68 @@ def api_status():
         "camera_type": cam_type,
         "active_camera": pipeline.camera_index,
         "is_simulated": is_sim,
+        "gpu_info": pipeline.gpu_info,
+        "depth_model": pipeline.depth_model_type,
+        "depth_scale": round(pipeline.depth_scale, 3),
         "fps": round(fps, 1),
         "detections": clean_dets,
         "width": pipeline.width,
         "height": pipeline.height,
         "is_streaming": pipeline.is_streaming,
+    })
+
+
+@app.route("/api/switch_depth_model", methods=["POST"])
+def api_switch_depth_model():
+    """Hot-swap depth model to vitl, vitb, vits, or zoedepth."""
+    if pipeline is None:
+        return jsonify({"error": "Pipeline not initialized"}), 500
+
+    data = request.get_json(force=True)
+    model_type = data.get("model_type", "vitl")
+    success = pipeline.switch_depth_model(model_type)
+
+    return jsonify({
+        "success": success,
+        "depth_model": pipeline.depth_model_type,
+    })
+
+
+@app.route("/api/set_calibration_scale", methods=["POST"])
+def api_set_calibration_scale():
+    """Update global distance scale factor or align to known distance."""
+    if pipeline is None:
+        return jsonify({"error": "Pipeline not initialized"}), 500
+
+    data = request.get_json(force=True)
+
+    if "scale" in data:
+        scale = float(data["scale"])
+        pipeline.set_calibration_scale(scale)
+    elif "target_distance" in data:
+        target = float(data["target_distance"])
+        # Find first detected object's current unscaled distance
+        with pipeline.lock:
+            dets = pipeline.latest_detections
+            if dets and "distance_m" in dets[0] and dets[0]["distance_m"] > 0:
+                current_dist = dets[0]["distance_m"]
+                # New scale = target / current_raw
+                # current_dist currently has pipeline.depth_scale applied
+                raw_dist = current_dist / pipeline.depth_scale
+                new_scale = target / raw_dist
+                pipeline.set_calibration_scale(new_scale)
+                return jsonify({
+                    "status": "calibrated",
+                    "new_scale": round(new_scale, 4),
+                    "measured_was": round(current_dist, 2),
+                    "target_is": round(target, 2),
+                })
+            else:
+                return jsonify({"error": "No object detected to align to"}), 400
+
+    return jsonify({
+        "status": "updated",
+        "depth_scale": round(pipeline.depth_scale, 4),
     })
 
 

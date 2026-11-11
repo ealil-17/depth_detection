@@ -482,6 +482,11 @@
         </div>
 
         <div class="header-stats">
+            <div class="stat-pill" style="border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.08);">
+                <span class="stat-label">Compute</span>
+                <span class="stat-value" id="gpuStatusText" style="color:var(--accent-success); font-size:0.75rem;">Detecting GPU...</span>
+            </div>
+
             <div class="stat-pill" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.08);">
                 <span class="stat-label">Device</span>
                 <span class="stat-value" id="activeCamBadge" style="color:var(--accent-cyan); font-weight:700;">Cam 0</span>
@@ -589,6 +594,36 @@
             <!-- Camera & Model Controls -->
             <div class="panel-card">
                 <h2>Configuration & Controls</h2>
+
+                <div class="form-row">
+                    <div class="form-label">
+                        <span>Depth Model (Metric Accuracy)</span>
+                        <span id="modelParamBadge" style="color:var(--accent-cyan); font-size:0.7rem; font-weight:600;">Large 335M</span>
+                    </div>
+                    <select id="selectDepthModel" onchange="switchDepthModel(this.value)">
+                        <option value="vitl" selected>Depth Anything V2 Large (335M - Highest Accuracy)</option>
+                        <option value="vitb">Depth Anything V2 Base (97M - High Accuracy / Balanced)</option>
+                        <option value="vits">Depth Anything V2 Small (25M - Fast Preview)</option>
+                        <option value="zoedepth">ZoeDepth Metric (Intel Labs - Multi-Dataset)</option>
+                    </select>
+                </div>
+
+                <div class="form-row" style="background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-subtle);">
+                    <div class="form-label" style="font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">
+                        <span>Distance Scale Multiplier</span>
+                        <span id="scaleMultiplierText" style="color:var(--accent-cyan); font-family:var(--font-mono);">1.00x</span>
+                    </div>
+                    <input type="range" id="sliderScaleMultiplier" min="0.30" max="2.50" step="0.02" value="1.00" oninput="onScaleSliderChange(this.value)">
+                    
+                    <div style="margin-top:0.65rem; border-top:1px solid var(--border-subtle); padding-top:0.5rem;">
+                        <span style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">🎯 1-Click Lens Calibration (Known Target):</span>
+                        <div style="display:flex; gap:0.4rem; align-items:center;">
+                            <input type="number" id="inputTargetDist" step="0.1" value="1.0" min="0.2" max="10" style="width:70px; padding:0.3rem; font-size:0.78rem; text-align:center;" placeholder="1.0">
+                            <span style="font-size:0.75rem; color:var(--text-muted);">metres</span>
+                            <button class="btn-primary" onclick="autoAlignDistance()" style="flex:1; padding:0.3rem 0.5rem; font-size:0.75rem; justify-content:center;">Auto-Align</button>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="form-row">
                     <div class="form-label">
@@ -824,6 +859,60 @@
             selectCamera(nextIndex);
         }
 
+        function switchDepthModel(model) {
+            const badge = document.getElementById('modelParamBadge');
+            if (model === 'vitl') badge.textContent = 'Large 335M';
+            else if (model === 'vitb') badge.textContent = 'Base 97M';
+            else if (model === 'vits') badge.textContent = 'Small 25M';
+            else if (model === 'zoedepth') badge.textContent = 'ZoeDepth Metric';
+
+            fetch('/api/switch_depth_model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_type: model })
+            })
+            .then(r => r.json())
+            .then(data => {
+                console.log("Switched depth model to:", data.depth_model);
+            })
+            .catch(err => console.error("Error switching depth model:", err));
+        }
+
+        function onScaleSliderChange(val) {
+            val = parseFloat(val);
+            document.getElementById('scaleMultiplierText').textContent = val.toFixed(2) + 'x';
+            fetch('/api/set_calibration_scale', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scale: val })
+            });
+        }
+
+        function autoAlignDistance() {
+            const target = parseFloat(document.getElementById('inputTargetDist').value);
+            if (isNaN(target) || target <= 0) {
+                alert("Please enter a valid distance in metres (e.g. 1.0 or 2.0)");
+                return;
+            }
+
+            fetch('/api/set_calibration_scale', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_distance: target })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'calibrated') {
+                    document.getElementById('scaleMultiplierText').textContent = data.new_scale.toFixed(2) + 'x';
+                    document.getElementById('sliderScaleMultiplier').value = data.new_scale;
+                    alert(`✓ Ground-Truth Calibrated!\nMeasured was: ${data.measured_was}m\nTarget is: ${data.target_is}m\nNew Scale Multiplier: ${data.new_scale}x`);
+                } else if (data.error) {
+                    alert("Alignment Notice: " + data.error + ". Point the camera so an object is clearly detected in the frame first.");
+                }
+            })
+            .catch(err => console.error("Auto align error:", err));
+        }
+
         function scanCameras() {
             fetch('/api/scan_cameras')
                 .then(r => r.json())
@@ -854,6 +943,13 @@
                     }
                     if (data.camera_type) {
                         document.getElementById('cameraStatusText').textContent = data.camera_type;
+                    }
+                    if (data.gpu_info) {
+                        document.getElementById('gpuStatusText').textContent = data.gpu_info;
+                    }
+                    if (data.depth_scale != null && !document.getElementById('sliderScaleMultiplier').matches(':active')) {
+                        document.getElementById('scaleMultiplierText').textContent = parseFloat(data.depth_scale).toFixed(2) + 'x';
+                        document.getElementById('sliderScaleMultiplier').value = data.depth_scale;
                     }
                     if (data.active_camera != null && data.active_camera !== activeCameraIndex) {
                         activeCameraIndex = data.active_camera;

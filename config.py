@@ -16,11 +16,17 @@ YOLO_DEVICE = "cuda:0"  # "cuda:0" or "cpu"
 YOLO_IMG_SIZE = 640
 
 # --- Depth Estimation Settings ---
-DEPTH_MODEL_TYPE = "vits"  # Options: "vits" (small/fast), "vitb" (base), "vitl" (large)
-DEPTH_MODEL_ENCODER = "vits"
+# Options for highest accuracy:
+#   "vitl" : Depth Anything V2 Large (335M params, SOTA accuracy, recommended for GPU)
+#   "vitb" : Depth Anything V2 Base (97M params, high accuracy, balanced speed)
+#   "vits" : Depth Anything V2 Small (25M params, fast preview)
+#   "zoedepth" : ZoeDepth Metric (Intel Labs, excellent indoor/outdoor metric depth)
+DEPTH_MODEL_TYPE = "vitl"  # Default to Large for maximum metric accuracy
+DEPTH_MODEL_ENCODER = "vitl"
 DEPTH_MAX_DEPTH = 20.0  # metres
 DEPTH_INPUT_SIZE = 518  # model input resolution
-DEPTH_DEVICE = "cuda:0"  # "cuda:0" or "cpu"
+DEPTH_DEVICE = "cuda:0"  # "cuda:0" for GPU, or "cpu"
+DEPTH_SCALE_FACTOR = 1.0  # Focal length scale multiplier for custom lenses
 
 # --- Distance Extraction ---
 BBOX_CENTER_CROP_RATIO = 0.4  # fraction of bbox center used for median depth

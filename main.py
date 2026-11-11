@@ -69,8 +69,8 @@ def parse_args():
         "--depth-model",
         type=str,
         default=config.DEPTH_MODEL_TYPE,
-        choices=["vits", "vitb", "vitl"],
-        help=f"Depth Anything V2 model variant (default: {config.DEPTH_MODEL_TYPE})",
+        choices=["vitl", "vitb", "vits", "zoedepth"],
+        help=f"Metric depth model (vitl=SOTA 335M Large, vitb=Base, vits=Small, zoedepth=Intel Labs; default: {config.DEPTH_MODEL_TYPE})",
     )
     parser.add_argument(
         "--confidence",
@@ -419,7 +419,7 @@ def main():
         return
 
     print("\n" + "=" * 70)
-    print(" LIVE STREAM STARTED")
+    print(" LIVE STREAM STARTED (Decoupled 30 FPS Architecture)")
     print(" Keyboard Controls:")
     print("   'q' : Quit application")
     print("   'c' : Switch active camera device (Cam 0 <-> Cam 1)")
@@ -428,32 +428,62 @@ def main():
     print("=" * 70 + "\n")
 
     frame_count = 0
-    cached_depth_map = None
     current_camera_idx = args.camera
+
+    # Asynchronous decoupled depth worker for 30 FPS playback
+    import threading
+    depth_lock = threading.Lock()
+    latest_grabbed_frame = [None]
+    async_depth_map = [None]
+    async_depth_vis = [None]
+    stop_worker = threading.Event()
+
+    def depth_async_loop():
+        while not stop_worker.is_set():
+            eval_frame = None
+            with depth_lock:
+                if latest_grabbed_frame[0] is not None:
+                    eval_frame = latest_grabbed_frame[0].copy()
+            if eval_frame is None:
+                time.sleep(0.01)
+                continue
+            try:
+                new_d = depth_estimator.estimate_depth(eval_frame)
+                if new_d is not None:
+                    vis_map = depth_estimator.get_depth_colormap(new_d)
+                    with depth_lock:
+                        async_depth_map[0] = new_d
+                        async_depth_vis[0] = vis_map
+            except Exception:
+                time.sleep(0.05)
+            time.sleep(0.01)
+
+    depth_thread = threading.Thread(target=depth_async_loop, daemon=True)
+    depth_thread.start()
 
     try:
         while True:
             ret, frame = camera.read_frame()
             if not ret or frame is None:
-                print("\n[Stream] End of stream or failed to read frame.")
-                break
+                time.sleep(0.005)
+                continue
 
             frame_count += 1
 
-            # 1. Object Detection
+            # Feed latest frame to async depth worker
+            with depth_lock:
+                latest_grabbed_frame[0] = frame
+                cached_depth_map = async_depth_map[0]
+                cached_depth_vis = async_depth_vis[0]
+
+            # 1. Object Detection (Fast GPU FP16)
             detections = detector.detect(frame)
 
-            # 2. Depth Estimation (runs on configured cadence for smooth FPS)
-            if frame_count % config.DEPTH_PROCESS_EVERY_N == 0 or cached_depth_map is None:
-                new_depth = depth_estimator.estimate_depth(frame)
-                if new_depth is not None:
-                    cached_depth_map = new_depth
-
-            # 3. Distance Extraction from Depth Map
+            # 2. Distance Extraction from newest depth map
             if cached_depth_map is not None and detections:
                 detections = distance_extractor.extract_all_distances(cached_depth_map, detections)
 
-                # 4. Calibration correction if active
+                # Calibration correction if active
                 calib_scale = calibration.calibration_params.get("scale", 1.0)
                 calib_offset = calibration.calibration_params.get("offset", 0.0)
                 if calib_scale != 1.0 or calib_offset != 0.0:
@@ -464,11 +494,11 @@ def main():
                             )
                             det["distance_cm"] = det["distance_m"] * 100.0
 
-            # 5. Multi-Object Tracking
+            # 3. Multi-Object Tracking
             if tracker is not None and detections:
                 detections = tracker.update(detections)
 
-            # 6. Render Live Feed
+            # 4. Render Live Feed
             annotated = display.draw_detections(frame.copy(), detections)
             annotated = display.draw_fps(annotated)
 
@@ -476,14 +506,13 @@ def main():
             info = {
                 "num_objects": len(detections),
                 "resolution": f"{frame.shape[1]}x{frame.shape[0]}",
-                "model_info": f"Tracking: {'ON' if tracker else 'OFF'}",
+                "model_info": f"Cam {current_camera_idx} | 30 FPS Mode",
             }
             annotated = display.draw_info_panel(annotated, info)
 
             # Side-by-side depth visualization
-            if display.show_depth_map and cached_depth_map is not None:
-                depth_colormap = depth_estimator.get_depth_colormap(cached_depth_map)
-                annotated = display.create_depth_visualization(annotated, depth_colormap)
+            if display.show_depth_map and cached_depth_vis is not None:
+                annotated = display.create_depth_visualization(annotated, cached_depth_vis)
 
             # Display window & handle keys
             key = display.show_frame(annotated)
@@ -514,6 +543,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[Exit] Interrupted by keyboard.")
     finally:
+        stop_worker.set()
         camera.release()
         display.destroy()
         print("[Exit] Cleaned up resources. Application terminated.")

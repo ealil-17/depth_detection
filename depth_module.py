@@ -6,6 +6,7 @@ which output depth values in real metres.
 
 import numpy as np
 import cv2
+import torch
 from PIL import Image
 
 from config import (
@@ -16,11 +17,19 @@ from config import (
     DEPTH_DEVICE,
 )
 
-# Mapping from encoder name to Hugging Face Metric Indoor model ID
+# Mapping from encoder / model key to Hugging Face Metric Model ID
+# Top open-source metric depth models:
+# 1. vitl: Depth Anything V2 Metric Large (335M params) - SOTA high-accuracy benchmark
+# 2. vitb: Depth Anything V2 Metric Base (97M params) - balanced high-accuracy
+# 3. vits: Depth Anything V2 Metric Small (25M params) - fast preview
+# 4. zoedepth: Intel Labs ZoeDepth Metric - renowned zero-shot metric depth model
 _MODEL_MAP = {
-    "vits": "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
-    "vitb": "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
     "vitl": "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf",
+    "vitb": "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
+    "vits": "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
+    "vitl-outdoor": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
+    "vitb-outdoor": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf",
+    "zoedepth": "Intel/zoedepth-nyu-kitti",
 }
 
 
@@ -85,22 +94,37 @@ class DepthEstimator:
             )
             return False
 
-        # Try the configured device first, fall back to CPU
-        devices_to_try = [self.device]
-        if self.device != "cpu":
+        # Try GPU (cuda:0) first if requested and available, else fall back to CPU
+        devices_to_try = []
+        if "cuda" in self.device and torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            print(f"[DepthEstimator] ✓ NVIDIA GPU Detected: {gpu_name} — Initializing GPU Acceleration.")
+            devices_to_try.append(self.device)
+        elif "cuda" in self.device:
+            print("[DepthEstimator] ⚠ CUDA was requested but torch.cuda.is_available() is False. Falling back to CPU.")
+            devices_to_try.append("cpu")
+        else:
+            devices_to_try.append(self.device)
+
+        if "cpu" not in devices_to_try:
             devices_to_try.append("cpu")
 
         for dev in devices_to_try:
             try:
-                print(f"[DepthEstimator] Loading {model_id} on {dev} …")
-                self.pipe = hf_pipeline(
-                    task="depth-estimation",
-                    model=model_id,
-                    device=dev,
-                )
-                self.device = dev  # record the device that actually worked
+                print(f"[DepthEstimator] Loading model '{model_id}' on device '{dev}' …")
+                pipeline_kwargs = {
+                    "task": "depth-estimation",
+                    "model": model_id,
+                    "device": dev,
+                }
+                # Enable FP16 on CUDA for 2x faster GPU throughput & lower VRAM
+                if "cuda" in str(dev) and torch.cuda.is_available():
+                    pipeline_kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
+
+                self.pipe = hf_pipeline(**pipeline_kwargs)
+                self.device = dev  # record device that worked
                 self._model_loaded = True
-                print(f"[DepthEstimator] Model loaded successfully on {dev}.")
+                print(f"[DepthEstimator] Model '{model_id}' successfully loaded on {dev} (GPU FP16 enabled: {'cuda' in str(dev)}).")
                 return True
             except Exception as exc:
                 print(f"[DepthEstimator] Failed to load on {dev}: {exc}")

@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Operating system / IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Captured snapshots & temporary testing outputs
+capture_*.png
+capture_*.jpg
+arducam_depth_snapshot*.jpg
+
+# Local calibration files (optional - kept clean)
+# calibration_data.json
+

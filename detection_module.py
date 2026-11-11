@@ -70,10 +70,12 @@ class ObjectDetector:
             if "cuda" in self.device:
                 if torch.cuda.is_available():
                     resolved_device = self.device
+                    gpu_name = torch.cuda.get_device_name(0)
+                    print(f"[ObjectDetector] ✓ NVIDIA GPU Detected: {gpu_name} (Using CUDA)")
                 else:
                     print(
-                        f"[ObjectDetector] CUDA requested ({self.device}) but "
-                        "unavailable – falling back to CPU."
+                        f"[ObjectDetector] ⚠ CUDA requested ({self.device}) but "
+                        "torch.cuda.is_available() is False – falling back to CPU."
                     )
                     resolved_device = "cpu"
             else:
@@ -126,6 +128,7 @@ class ObjectDetector:
                 iou=self.iou_threshold,
                 imgsz=self.img_size,
                 device=self.device,
+                half=("cuda" in str(self.device)),
                 verbose=False,
             )
 

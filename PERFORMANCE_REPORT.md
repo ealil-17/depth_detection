@@ -133,10 +133,23 @@ Taking the **median** rather than the mean further eliminates impulse noise and 
 ## 7. Recommendations for Deployment
 
 1. **Lens Focusing**: Since the Arducam 12MP camera features a manual fixed-focus ring, ensure the lens is physically focused at the hyperfocal distance ($\sim 1.8\text{--}2.5\text{ m}$) prior to fastening the ring screw.
-2. **Checkerboard Intrinsics**: Run `python main.py --calibrate` once to compute camera matrix and lens distortion coefficients.
-3. **Metric Depth Tuning**: Run `python main.py --validate` and record at least 5 known distances between $0.5\text{ m}$ and $4.0\text{ m}$ to store the optimal linear calibration vector (`scale` and `offset`).
-4. **Production Startup**:
+2. **GPU Acceleration**: Always ensure PyTorch with CUDA is installed (`pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118`). On GPU with FP16 enabled, both YOLO and the Large depth model run with full hardware acceleration.
+3. **Model Selection**: Switch to **Depth Anything V2 Large (`vitl`)** (335M parameters) or **ZoeDepth Metric (`zoedepth`)** for superior depth edge sharpness and high-accuracy metric estimation.
+4. **1-Click Ground-Truth Auto-Alignment**: Monocular networks are trained on canonical pinhole cameras with standard $\sim 60^\circ$ FOV. The Arducam fixed-focus lens has its own focal length; use the 1-Click Auto-Align button in the Web Studio or set `--depth-model vitl` to eliminate scale offset in seconds.
+5. **Production Startup**:
    ```bash
-   python main.py --camera 0 --width 1280 --height 720 --fps 30 --depth-model vits
+   python web_app.py --device cuda:0
    ```
+
+---
+
+## 8. High-Accuracy Metric Depth Model Comparison
+
+| Model | Architecture & Parameters | Training Data | Primary Strengths | Recommended Deployment |
+|---|---|---|---|---|
+| **Depth Anything V2 Large (`vitl`)** | ViT-Large (335M params) | 62M images (Synthetic + NYUv2 + Hypersim) | SOTA boundary precision, minimal edge bleeding, superior structural fidelity | **Recommended for NVIDIA GPU (RTX 3060/4060+)** |
+| **Depth Anything V2 Base (`vitb`)** | ViT-Base (97M params) | 62M images | High accuracy with 35% lower VRAM footprint than Large | Balanced GPU setups |
+| **ZoeDepth Metric (`zoedepth`)** | Metric Bins (Intel Labs) | NYUv2 + KITTI | Excellent zero-shot generalization across indoor rooms | Alternative top metric benchmark |
+| **Metric3D v2** | Canonical Pinhole Normalization | 8M depth scans | Explicitly accounts for camera focal length | Research camera setups |
+
 

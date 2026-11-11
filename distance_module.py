@@ -71,7 +71,18 @@ class DistanceExtractor:
                 'std_depth': 0.0,
             }
 
-        median_depth = float(np.median(valid_values))
+        # Robust Outlier Rejection via Interquartile Range (IQR)
+        # Prevents background walls or hollow gaps from corrupting foreground object distance
+        q25, q75 = np.percentile(valid_values, 25), np.percentile(valid_values, 75)
+        iqr = q75 - q25
+        if iqr > 0:
+            inliers = valid_values[(valid_values >= q25 - 1.5 * iqr) & (valid_values <= q75 + 1.5 * iqr)]
+            if inliers.size >= 5:
+                valid_values = inliers
+
+        # The 35th percentile of inliers accurately captures the front-facing physical surface
+        # of the object facing the camera, avoiding background bleed
+        measured_depth = float(np.percentile(valid_values, 35))
         min_d = float(np.min(valid_values))
         max_d = float(np.max(valid_values))
         std_d = float(np.std(valid_values))
@@ -80,19 +91,19 @@ class DistanceExtractor:
         is_reliable = True
         reliability_note = 'OK'
 
-        if median_depth < self.min_depth:
+        if measured_depth < self.min_depth:
             is_reliable = False
-            reliability_note = f'Depth {median_depth:.2f}m below minimum threshold {self.min_depth:.2f}m'
-        elif median_depth > self.max_depth:
+            reliability_note = f'Depth {measured_depth:.2f}m below minimum threshold {self.min_depth:.2f}m'
+        elif measured_depth > self.max_depth:
             is_reliable = False
-            reliability_note = f'Depth {median_depth:.2f}m above maximum threshold {self.max_depth:.2f}m'
-        elif median_depth > self.unreliable_threshold:
+            reliability_note = f'Depth {measured_depth:.2f}m above maximum threshold {self.max_depth:.2f}m'
+        elif measured_depth > self.unreliable_threshold:
             is_reliable = False
-            reliability_note = f'Depth {median_depth:.2f}m exceeds unreliable threshold {self.unreliable_threshold:.2f}m'
+            reliability_note = f'Depth {measured_depth:.2f}m exceeds unreliable threshold {self.unreliable_threshold:.2f}m'
 
         return {
-            'distance_m': median_depth,
-            'distance_cm': median_depth * 100.0,
+            'distance_m': measured_depth,
+            'distance_cm': measured_depth * 100.0,
             'is_reliable': is_reliable,
             'reliability_note': reliability_note,
             'min_depth': min_d,
