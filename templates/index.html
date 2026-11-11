@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arducam Real-Time Object Detection & Depth Estimation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0a0d14;
+            --bg-surface: #121722;
+            --bg-elevated: #1a2233;
+            --border-subtle: #243048;
+            --border-strong: #334366;
+            --accent-primary: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.25);
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --accent-danger: #ef4444;
+            --accent-cyan: #06b6d4;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --font-main: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 0.85rem 1.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        .brand-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand-logo {
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #2563eb, #06b6d4);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .brand-text h1 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(to right, #f8fafc, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-text p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+        }
+
+        .header-stats {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+        }
+
+        .stat-pill {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            padding: 0.4rem 0.85rem;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.82rem;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-success);
+            box-shadow: 0 0 8px var(--accent-success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1; }
+        }
+
+        /* Main Layout */
+        main {
+            flex: 1;
+            padding: 1.5rem 1.75rem;
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 1.5rem;
+            max-width: 1800px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        @media (max-width: 1200px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Stream Panel */
+        .viewport-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .streams-grid {
+            display: grid;
+            gap: 1rem;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 14px;
+            padding: 1rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .streams-grid.layout-split {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .streams-grid.layout-single {
+            grid-template-columns: 1fr;
+        }
+
+        .stream-card {
+            background: #000;
+            border-radius: 10px;
+            border: 1px solid var(--border-subtle);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            min-height: 420px;
+        }
+
+        .stream-card-header {
+            background: rgba(18, 23, 34, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 0.5rem 0.85rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .stream-badge {
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-live {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--accent-success);
+            border: 1px solid rgba(16, 185, 129, 0.4);
+        }
+
+        .badge-depth {
+            background: rgba(6, 182, 212, 0.2);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+        }
+
+        .stream-img-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #05070a;
+            position: relative;
+        }
+
+        .stream-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        /* Control Bar underneath video */
+        .controls-toolbar {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .button-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        button {
+            font-family: var(--font-main);
+            font-size: 0.82rem;
+            font-weight: 600;
+            border-radius: 8px;
+            padding: 0.5rem 0.9rem;
+            border: 1px solid transparent;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            transition: all 0.15s ease;
+        }
+
+        .btn-primary {
+            background: var(--accent-primary);
+            color: #fff;
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-danger);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-secondary {
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            border-color: var(--border-subtle);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border-subtle);
+        }
+
+        .btn-active {
+            background: var(--accent-primary) !important;
+            color: white !important;
+            border-color: var(--accent-primary) !important;
+        }
+
+        /* Side Panel: Telemetry & Controls */
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        .panel-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 14px;
+            padding: 1.25rem;
+        }
+
+        .panel-card h2 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: var(--text-primary);
+        }
+
+        /* Table of Detections */
+        .detections-table-container {
+            max-height: 380px;
+            overflow-y: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            text-align: left;
+        }
+
+        th {
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            padding: 0.6rem 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.68rem;
+            letter-spacing: 0.04em;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+
+        td {
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid var(--border-subtle);
+            font-family: var(--font-mono);
+            color: var(--text-secondary);
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .dist-badge {
+            font-weight: 600;
+            padding: 0.2rem 0.45rem;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .dist-reliable {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .dist-unreliable {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        /* Form elements */
+        .form-row {
+            margin-bottom: 0.85rem;
+        }
+
+        .form-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .form-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.35rem;
+            font-weight: 500;
+        }
+
+        select, input[type="range"] {
+            width: 100%;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            border-radius: 8px;
+            padding: 0.45rem 0.65rem;
+            font-size: 0.82rem;
+            font-family: var(--font-main);
+            outline: none;
+        }
+
+        select:focus {
+            border-color: var(--accent-primary);
+        }
+
+        input[type="range"] {
+            padding: 0.25rem 0;
+            cursor: pointer;
+            accent-color: var(--accent-primary);
+        }
+
+        /* Hardware Notice Card */
+        .hardware-badge-card {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.5), rgba(15, 23, 42, 0.8));
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 0.85rem 1rem;
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-start;
+        }
+
+        .hardware-icon {
+            font-size: 1.25rem;
+            line-height: 1;
+        }
+
+        .hardware-info h3 {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.2rem;
+        }
+
+        .hardware-info p {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .empty-placeholder {
+            text-align: center;
+            padding: 2rem 1rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="brand-section">
+            <div class="brand-logo">🔭</div>
+            <div class="brand-text">
+                <h1>Arducam Vision Studio</h1>
+                <p>Fixed-Focus Multi-Object Detection & Metric Depth Estimation</p>
+            </div>
+        </div>
+
+        <div class="header-stats">
+            <div class="stat-pill" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.08);">
+                <span class="stat-label">Device</span>
+                <span class="stat-value" id="activeCamBadge" style="color:var(--accent-cyan); font-weight:700;">Cam 0</span>
+                <button class="btn-primary" id="btnQuickSwitch" onclick="quickSwitchCamera()" style="padding: 0.2rem 0.6rem; font-size: 0.72rem; margin-left: 0.35rem;" title="Switch to the next connected camera">⇄ Switch Camera</button>
+            </div>
+
+            <div class="stat-pill">
+                <div class="status-dot" id="streamStatusDot"></div>
+                <span class="stat-label">Status</span>
+                <span class="stat-value" id="cameraStatusText">LIVE</span>
+            </div>
+
+            <div class="stat-pill">
+                <span class="stat-label">FPS</span>
+                <span class="stat-value" id="fpsDisplay">--</span>
+            </div>
+
+            <div class="stat-pill">
+                <span class="stat-label">Objects</span>
+                <span class="stat-value" id="objectsCount">0</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main>
+        <!-- Viewport & Streams Area -->
+        <div class="viewport-container">
+            <div class="streams-grid layout-split" id="streamsGrid">
+                
+                <!-- Live Detection Stream -->
+                <div class="stream-card" id="detectionCard">
+                    <div class="stream-card-header">
+                        <span class="stream-badge badge-live">Live Object Detection</span>
+                        <span style="font-size:0.75rem; color:var(--text-muted);" id="resDisplay">1280x720</span>
+                    </div>
+                    <div class="stream-img-wrapper">
+                        <img src="/video_feed" id="mainFeed" class="stream-img" alt="Object Detection Feed" onerror="handleImageError(this)">
+                    </div>
+                </div>
+
+                <!-- Depth Estimation Stream -->
+                <div class="stream-card" id="depthCard">
+                    <div class="stream-card-header">
+                        <span class="stream-badge badge-depth">Depth Anything V2 Metric</span>
+                        <span style="font-size:0.75rem; color:var(--text-muted);">Inferno Colormap (m)</span>
+                    </div>
+                    <div class="stream-img-wrapper">
+                        <img src="/depth_feed" id="depthFeed" class="stream-img" alt="Depth Map Feed" onerror="handleImageError(this)">
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Bottom Toolbar -->
+            <div class="controls-toolbar">
+                <div class="button-group">
+                    <button class="btn-primary" id="btnToggleStream" onclick="toggleStream()">⏸ Pause Stream</button>
+                    <button class="btn-secondary" onclick="captureSnapshot()">📸 Snapshot</button>
+                </div>
+
+                <div class="button-group">
+                    <span style="font-size:0.78rem; color:var(--text-muted); margin-right:0.25rem;">Layout:</span>
+                    <button class="btn-secondary btn-active" id="btnLayoutSplit" onclick="setLayout('split')">Side-by-Side</button>
+                    <button class="btn-secondary" id="btnLayoutDetection" onclick="setLayout('detection')">Detection Only</button>
+                    <button class="btn-secondary" id="btnLayoutDepth" onclick="setLayout('depth')">Depth Only</button>
+                </div>
+
+                <div class="button-group">
+                    <span style="font-size:0.78rem; color:var(--text-muted); margin-right:0.25rem;">Units:</span>
+                    <button class="btn-secondary btn-active" id="btnUnitM" onclick="setUnit('m')">Metres (m)</button>
+                    <button class="btn-secondary" id="btnUnitCm" onclick="setUnit('cm')">Centimetres (cm)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar: Object Telemetry & Settings -->
+        <div class="side-panel">
+            
+            <!-- Real-Time Detection Telemetry -->
+            <div class="panel-card">
+                <h2>
+                    <span>Live Object Telemetry</span>
+                    <span style="font-size: 0.75rem; font-weight: normal; color: var(--accent-success);" id="tableActiveCount">0 Active</span>
+                </h2>
+                <div class="detections-table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Class</th>
+                                <th>Distance</th>
+                                <th>Conf</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detectionsTableBody">
+                            <tr>
+                                <td colspan="4" class="empty-placeholder">Awaiting live object detections...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Camera & Model Controls -->
+            <div class="panel-card">
+                <h2>Configuration & Controls</h2>
+
+                <div class="form-row">
+                    <div class="form-label">
+                        <span>Resolution</span>
+                    </div>
+                    <select id="selectResolution" onchange="updateSettings()">
+                        <option value="1280x720" selected>1280 × 720 (720p HD - Recommended)</option>
+                        <option value="640x480">640 × 480 (VGA - Fast)</option>
+                        <option value="1920x1080">1920 × 1080 (1080p FHD)</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-label">
+                        <span>YOLO Confidence Threshold</span>
+                        <span id="confValueText" style="font-family:var(--font-mono);">0.50</span>
+                    </div>
+                    <input type="range" id="sliderConfidence" min="0.10" max="0.90" step="0.05" value="0.50" oninput="onConfidenceChange(this.value)">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-label">
+                        <span>Depth Cadence (Every N Frames)</span>
+                        <span id="cadenceValueText" style="font-family:var(--font-mono);">2</span>
+                    </div>
+                    <input type="range" id="sliderCadence" min="1" max="5" step="1" value="2" oninput="onCadenceChange(this.value)">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-label">
+                        <span>Active Camera Device</span>
+                        <a href="javascript:void(0)" onclick="scanCameras()" style="color:var(--accent-primary); font-size:0.75rem; text-decoration:none;">🔄 Refresh Devices</a>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+                        <button class="btn-secondary btn-active" id="btnQuickCam0" onclick="selectCamera(0)" style="flex:1; justify-content:center; padding:0.4rem;">Cam 0 (Primary)</button>
+                        <button class="btn-secondary" id="btnQuickCam1" onclick="selectCamera(1)" style="flex:1; justify-content:center; padding:0.4rem;">Cam 1 (Second)</button>
+                    </div>
+                    <select id="selectCameraIndex" onchange="selectCamera(this.value)">
+                        <option value="0" selected>Camera 0 (Primary)</option>
+                        <option value="1">Camera 1 (Secondary)</option>
+                        <option value="2">Camera 2</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Hardware & Compliance Notice -->
+            <div class="hardware-badge-card">
+                <div class="hardware-icon">📷</div>
+                <div class="hardware-info">
+                    <h3>Fixed-Focus Optics Active</h3>
+                    <p>Designed for Arducam 12MP UVC without autofocus commands. Distance is estimated via <strong>Depth Anything V2 Metric</strong> & central 40% median bounding box sampling.</p>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        let currentUnit = 'm';
+        let isStreaming = true;
+        let pollInterval = null;
+
+        function setLayout(mode) {
+            const grid = document.getElementById('streamsGrid');
+            const detCard = document.getElementById('detectionCard');
+            const depthCard = document.getElementById('depthCard');
+
+            document.getElementById('btnLayoutSplit').classList.remove('btn-active');
+            document.getElementById('btnLayoutDetection').classList.remove('btn-active');
+            document.getElementById('btnLayoutDepth').classList.remove('btn-active');
+
+            if (mode === 'split') {
+                grid.className = 'streams-grid layout-split';
+                detCard.style.display = 'flex';
+                depthCard.style.display = 'flex';
+                document.getElementById('btnLayoutSplit').classList.add('btn-active');
+            } else if (mode === 'detection') {
+                grid.className = 'streams-grid layout-single';
+                detCard.style.display = 'flex';
+                depthCard.style.display = 'none';
+                document.getElementById('btnLayoutDetection').classList.add('btn-active');
+            } else if (mode === 'depth') {
+                grid.className = 'streams-grid layout-single';
+                detCard.style.display = 'none';
+                depthCard.style.display = 'flex';
+                document.getElementById('btnLayoutDepth').classList.add('btn-active');
+            }
+        }
+
+        function setUnit(unit) {
+            currentUnit = unit;
+            document.getElementById('btnUnitM').classList.toggle('btn-active', unit === 'm');
+            document.getElementById('btnUnitCm').classList.toggle('btn-active', unit === 'cm');
+            updateTelemetryTable(lastTelemetryDetections);
+        }
+
+        function toggleStream() {
+            isStreaming = !isStreaming;
+            const btn = document.getElementById('btnToggleStream');
+            const mainFeed = document.getElementById('mainFeed');
+            const depthFeed = document.getElementById('depthFeed');
+            const statusDot = document.getElementById('streamStatusDot');
+            const statusText = document.getElementById('cameraStatusText');
+
+            fetch('/api/controls', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_streaming: isStreaming })
+            });
+
+            if (isStreaming) {
+                btn.textContent = '⏸ Pause Stream';
+                btn.className = 'btn-primary';
+                mainFeed.src = '/video_feed?t=' + Date.now();
+                depthFeed.src = '/depth_feed?t=' + Date.now();
+                statusDot.style.backgroundColor = 'var(--accent-success)';
+                statusText.textContent = 'LIVE';
+            } else {
+                btn.textContent = '▶ Resume Stream';
+                btn.className = 'btn-secondary';
+                statusDot.style.backgroundColor = 'var(--accent-warning)';
+                statusText.textContent = 'PAUSED';
+            }
+        }
+
+        function captureSnapshot() {
+            window.open('/api/snapshot', '_blank');
+        }
+
+        function onConfidenceChange(val) {
+            document.getElementById('confValueText').textContent = parseFloat(val).toFixed(2);
+            updateSettings();
+        }
+
+        function onCadenceChange(val) {
+            document.getElementById('cadenceValueText').textContent = val;
+            updateSettings();
+        }
+
+        function updateSettings() {
+            const res = document.getElementById('selectResolution').value.split('x');
+            const conf = parseFloat(document.getElementById('sliderConfidence').value);
+            const cadence = parseInt(document.getElementById('sliderCadence').value);
+            const camIndex = parseInt(document.getElementById('selectCameraIndex').value);
+
+            fetch('/api/controls', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    width: parseInt(res[0]),
+                    height: parseInt(res[1]),
+                    confidence: conf,
+                    depth_cadence: cadence,
+                    camera_index: camIndex
+                })
+            }).then(r => r.json()).then(data => {
+                document.getElementById('resDisplay').textContent = `${data.width}x${data.height}`;
+            });
+        }
+
+        let lastTelemetryDetections = [];
+
+        function updateTelemetryTable(detections) {
+            lastTelemetryDetections = detections || [];
+            const tbody = document.getElementById('detectionsTableBody');
+            document.getElementById('tableActiveCount').textContent = `${lastTelemetryDetections.length} Active`;
+            document.getElementById('objectsCount').textContent = lastTelemetryDetections.length;
+
+            if (!lastTelemetryDetections || lastTelemetryDetections.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-placeholder">No objects currently detected</td></tr>';
+                return;
+            }
+
+            let html = '';
+            lastTelemetryDetections.forEach(det => {
+                const trackId = det.track_id != null ? `#${det.track_id}` : '-';
+                const distM = det.distance_m || 0;
+                let distText = currentUnit === 'cm' 
+                    ? `${(distM * 100).toFixed(0)} cm` 
+                    : `${distM.toFixed(2)} m`;
+
+                const isReliable = det.is_reliable !== false;
+                const badgeClass = isReliable ? 'dist-reliable' : 'dist-unreliable';
+                const confText = (det.confidence * 100).toFixed(0) + '%';
+
+                html += `
+                    <tr>
+                        <td style="color:var(--accent-cyan); font-weight:600;">${trackId}</td>
+                        <td style="color:var(--text-primary); font-weight:500;">${det.class_name}</td>
+                        <td>
+                            <span class="dist-badge ${badgeClass}">${distText}</span>
+                        </td>
+                        <td>${confText}</td>
+                    </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        }
+
+        let activeCameraIndex = 0;
+
+        function selectCamera(index) {
+            index = parseInt(index);
+            activeCameraIndex = index;
+            
+            // Visual updates
+            document.getElementById('activeCamBadge').textContent = `Cam ${index}`;
+            document.getElementById('selectCameraIndex').value = index;
+            document.getElementById('btnQuickCam0').classList.toggle('btn-active', index === 0);
+            document.getElementById('btnQuickCam1').classList.toggle('btn-active', index === 1);
+            document.getElementById('btnQuickSwitch').textContent = index === 0 ? "⇄ Switch to Cam 1" : "⇄ Switch to Cam 0";
+
+            // Call API
+            fetch('/api/switch_camera', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ camera_index: index })
+            })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('cameraStatusText').textContent = data.camera_type;
+                // Refresh stream video elements smoothly
+                const mainFeed = document.getElementById('mainFeed');
+                const depthFeed = document.getElementById('depthFeed');
+                mainFeed.src = '/video_feed?t=' + Date.now();
+                depthFeed.src = '/depth_feed?t=' + Date.now();
+            })
+            .catch(err => console.error("Camera switch error:", err));
+        }
+
+        function quickSwitchCamera() {
+            const nextIndex = activeCameraIndex === 0 ? 1 : 0;
+            selectCamera(nextIndex);
+        }
+
+        function scanCameras() {
+            fetch('/api/scan_cameras')
+                .then(r => r.json())
+                .then(data => {
+                    const sel = document.getElementById('selectCameraIndex');
+                    sel.innerHTML = '';
+                    data.cameras.forEach(cam => {
+                        const opt = document.createElement('option');
+                        opt.value = cam.index;
+                        opt.textContent = cam.label;
+                        if (cam.index === activeCameraIndex) opt.selected = true;
+                        sel.appendChild(opt);
+                    });
+                })
+                .catch(err => console.debug("Camera scan error:", err));
+        }
+
+        // Poll metrics and telemetry
+        function pollStatus() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.fps != null) {
+                        document.getElementById('fpsDisplay').textContent = data.fps.toFixed(1);
+                    }
+                    if (data.detections) {
+                        updateTelemetryTable(data.detections);
+                    }
+                    if (data.camera_type) {
+                        document.getElementById('cameraStatusText').textContent = data.camera_type;
+                    }
+                    if (data.active_camera != null && data.active_camera !== activeCameraIndex) {
+                        activeCameraIndex = data.active_camera;
+                        document.getElementById('activeCamBadge').textContent = `Cam ${activeCameraIndex}`;
+                        document.getElementById('selectCameraIndex').value = activeCameraIndex;
+                        document.getElementById('btnQuickCam0').classList.toggle('btn-active', activeCameraIndex === 0);
+                        document.getElementById('btnQuickCam1').classList.toggle('btn-active', activeCameraIndex === 1);
+                        document.getElementById('btnQuickSwitch').textContent = activeCameraIndex === 0 ? "⇄ Switch to Cam 1" : "⇄ Switch to Cam 0";
+                    }
+                })
+                .catch(err => console.debug('Status poll error:', err));
+        }
+
+        // Initialize camera list on load
+        scanCameras();
+
+        function handleImageError(img) {
+            console.warn('Stream image failed to load, reconnecting...');
+            setTimeout(() => {
+                if (isStreaming) {
+                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
+                }
+            }, 2000);
+        }
+
+        pollInterval = setInterval(pollStatus, 500);
+    </script>
+</body>
+</html>
+

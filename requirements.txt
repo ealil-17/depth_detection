@@ -1,0 +1,19 @@
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# YOLO Object Detection
+ultralytics>=8.0.0
+
+# Depth Anything V2 Metric (via Hugging Face)
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.35.0
+Pillow>=10.0.0
+
+# Optional: accelerated inference
+# onnxruntime-gpu>=1.16.0
+
+# Web Application UI
+flask>=2.3.0
+flask-cors>=4.0.0
