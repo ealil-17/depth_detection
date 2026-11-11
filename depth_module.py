@@ -161,20 +161,38 @@ class DepthEstimator:
             # 3. Run the pipeline
             result = self.pipe(pil_image)
 
-            # 4. Extract the depth PIL Image
-            depth_pil = result["depth"]
+            # 4. Extract the raw metric depth tensor in physical METRES
+            # CRITICAL FIX: Hugging Face transformers DepthEstimationPipeline returns:
+            # - 'predicted_depth': torch.Tensor containing raw physical METRIC depth (in metres, e.g. 1.25, 2.40)
+            # - 'depth': PIL Image normalized to 0-255 for visualization
+            # We MUST extract 'predicted_depth' to get physical distance measurements!
+            if isinstance(result, dict) and "predicted_depth" in result:
+                raw_pred = result["predicted_depth"]
+                if hasattr(raw_pred, "detach"):
+                    depth_map = raw_pred.detach().cpu().to(torch.float32).numpy().squeeze()
+                else:
+                    depth_map = np.array(raw_pred, dtype=np.float32).squeeze()
+            elif isinstance(result, dict) and "depth" in result:
+                depth_map = np.array(result["depth"], dtype=np.float32)
+            else:
+                depth_map = np.array(result, dtype=np.float32).squeeze()
 
-            # 5. Convert to numpy float32
-            depth_map = np.array(depth_pil, dtype=np.float32)
-
-            # 6. Resize to original frame dimensions if needed
+            # 5. Resize to original frame dimensions if needed
             h, w = frame.shape[:2]
-            if depth_map.shape[0] != h or depth_map.shape[1] != w:
-                depth_map = cv2.resize(
-                    depth_map, (w, h), interpolation=cv2.INTER_LINEAR
-                )
+            if depth_map.ndim == 2:
+                if depth_map.shape[0] != h or depth_map.shape[1] != w:
+                    depth_map = cv2.resize(
+                        depth_map, (w, h), interpolation=cv2.INTER_LINEAR
+                    )
+            elif depth_map.ndim == 3:
+                depth_map = depth_map[0]
+                if depth_map.shape[0] != h or depth_map.shape[1] != w:
+                    depth_map = cv2.resize(
+                        depth_map, (w, h), interpolation=cv2.INTER_LINEAR
+                    )
 
-            # 7. The metric model already outputs values in metres
+            # Sanity check: Ensure positive metric values
+            depth_map = np.maximum(depth_map, 0.0)
             return depth_map
 
         except Exception as exc:

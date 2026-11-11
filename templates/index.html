@@ -808,11 +808,17 @@
                 const isReliable = det.is_reliable !== false;
                 const badgeClass = isReliable ? 'dist-reliable' : 'dist-unreliable';
                 const confText = (det.confidence * 100).toFixed(0) + '%';
+                const geomInfo = det.geom_dist_m != null 
+                    ? `<div style="font-size:0.68rem; color:var(--text-muted); margin-top:2px;">Optics: ${det.geom_dist_m}m</div>` 
+                    : '';
 
                 html += `
                     <tr>
                         <td style="color:var(--accent-cyan); font-weight:600;">${trackId}</td>
-                        <td style="color:var(--text-primary); font-weight:500;">${det.class_name}</td>
+                        <td style="color:var(--text-primary); font-weight:500;">
+                            ${det.class_name}
+                            ${geomInfo}
+                        </td>
                         <td>
                             <span class="dist-badge ${badgeClass}">${distText}</span>
                         </td>

@@ -3,6 +3,24 @@ import numpy as np
 from config import (BBOX_CENTER_CROP_RATIO, MIN_DEPTH_CONFIDENCE,
                     MAX_DEPTH_CONFIDENCE, UNRELIABLE_DEPTH_THRESHOLD)
 
+# Physical real-world heights (metres) for common objects
+# Used for optical pinhole geometry cross-validation
+OBJECT_PHYSICAL_HEIGHTS = {
+    "person": 1.70,
+    "bottle": 0.23,
+    "cup": 0.10,
+    "chair": 0.85,
+    "couch": 0.85,
+    "laptop": 0.25,
+    "cell phone": 0.15,
+    "tv": 0.60,
+    "backpack": 0.45,
+    "handbag": 0.30,
+    "book": 0.22,
+    "potted plant": 0.35,
+    "dining table": 0.75,
+}
+
 
 class DistanceExtractor:
     """Extracts distance measurements from depth maps for detected objects."""
@@ -111,7 +129,23 @@ class DistanceExtractor:
             'std_depth': std_d,
         }
 
-    def extract_all_distances(self, depth_map: np.ndarray, detections: list) -> list:
+    def estimate_geometric_distance(self, bbox: list, class_name: str, img_h: int = 720, focal_length_px: float = 950.0) -> float | None:
+        """Estimate optical pinhole distance based on known real-world object height.
+        Formula: Distance = (Focal_Length * Real_Height) / BoundingBox_Pixel_Height
+        """
+        if not bbox or not class_name:
+            return None
+        x1, y1, x2, y2 = bbox
+        pixel_h = max(1, y2 - y1)
+        real_h = OBJECT_PHYSICAL_HEIGHTS.get(class_name.lower())
+        if real_h is None:
+            return None
+        # Scale focal length according to frame height
+        effective_fy = focal_length_px * (img_h / 720.0)
+        geom_dist = (effective_fy * real_h) / float(pixel_h)
+        return round(float(geom_dist), 2)
+
+    def extract_all_distances(self, depth_map: np.ndarray, detections: list, focal_length_px: float = 950.0) -> list:
         """
         Extract distances for all detected objects.
 
@@ -120,12 +154,16 @@ class DistanceExtractor:
             detections: list of detection dicts with 'bbox' key
 
         Returns: list of detection dicts augmented with distance info:
-            each dict gets 'distance_m', 'is_reliable', 'reliability_note' added
+            each dict gets 'distance_m', 'is_reliable', 'reliability_note', 'geom_dist_m' added
         """
         results = []
+        img_h = depth_map.shape[0] if depth_map is not None else 720
+
         for det in detections:
             det_copy = dict(det)
             bbox = det_copy.get('bbox')
+            class_name = det_copy.get('class_name', '')
+
             if bbox is not None:
                 dist_info = self.extract_distance(depth_map, bbox)
                 det_copy['distance_m'] = dist_info['distance_m']
@@ -135,9 +173,14 @@ class DistanceExtractor:
                 det_copy['min_depth'] = dist_info['min_depth']
                 det_copy['max_depth'] = dist_info['max_depth']
                 det_copy['std_depth'] = dist_info['std_depth']
+
+                # Geometric optical distance cross-validation
+                geom_dist = self.estimate_geometric_distance(bbox, class_name, img_h=img_h, focal_length_px=focal_length_px)
+                det_copy['geom_dist_m'] = geom_dist
             else:
                 det_copy['distance_m'] = 0.0
                 det_copy['distance_cm'] = 0.0
+                det_copy['geom_dist_m'] = None
                 det_copy['is_reliable'] = False
                 det_copy['reliability_note'] = 'No bounding box available'
                 det_copy['min_depth'] = 0.0

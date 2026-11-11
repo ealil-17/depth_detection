@@ -496,6 +496,7 @@ def api_status():
             "class_name": d.get("class_name", "object"),
             "confidence": round(float(d.get("confidence", 0.0)), 2),
             "distance_m": round(float(d.get("distance_m", 0.0)), 2),
+            "geom_dist_m": round(float(d["geom_dist_m"]), 2) if d.get("geom_dist_m") is not None else None,
             "is_reliable": bool(d.get("is_reliable", True)),
         })
 
